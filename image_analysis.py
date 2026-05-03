@@ -5,50 +5,6 @@ Role: Vision / AI Lead (Ole)
 Analyzes real-estate listing photos for sun and lighting conditions.
 Feeds a structured JSON dict straight into Gabriel's reconciliation engine.
 
-────────────────────────────────────────────────────────────────────────────────
-SETUP GUIDE  —  remove these comments once your key is working
-────────────────────────────────────────────────────────────────────────────────
-
-1. CREATE AN ANTHROPIC ACCOUNT AND API KEY
-   a. Open https://console.anthropic.com in your browser.
-   b. Sign up (or log in if you already have an account).
-   c. In the left sidebar click "API Keys", then "Create Key".
-   d. Give it a name like "SunProofAI" and click Create.
-   e. COPY THE KEY NOW — it starts with "sk-ant-api03-..." and you only see it once.
-
-2. ADD BILLING (the API will refuse requests without a payment method)
-   a. In the console go to Settings → Billing.
-   b. Click "Add payment method" and enter a credit card.
-   c. Top up with €5–10 — more than enough for all your test images.
-   d. Cost estimate: ~$0.02–0.05 per image with claude-opus-4-7.
-
-3. SET THE ENVIRONMENT VARIABLE  (NEVER hardcode the key in the file)
-
-   macOS / Linux — run this in your terminal, or add it to ~/.zshrc:
-       export ANTHROPIC_API_KEY="sk-ant-api03-..."
-
-   Windows Command Prompt:
-       set ANTHROPIC_API_KEY=sk-ant-api03-...
-
-   Windows PowerShell:
-       $env:ANTHROPIC_API_KEY = "sk-ant-api03-..."
-
-   Or use a .env file in the project root (easier for the whole team):
-       Create a file called ".env" containing:
-           ANTHROPIC_API_KEY=sk-ant-api03-...
-       Then install python-dotenv:
-           pip install python-dotenv
-       And add these two lines at the top of main.py / app.py:
-           from dotenv import load_dotenv
-           load_dotenv()
-
-   ⚠ Add ".env" to .gitignore RIGHT NOW — never commit API keys to GitHub!
-
-4. INSTALL DEPENDENCIES
-       pip install anthropic Pillow
-   (pydantic is bundled with the anthropic package — no separate install needed)
-
-────────────────────────────────────────────────────────────────────────────────
 """
 
 import base64
