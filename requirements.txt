@@ -1,2 +1,9 @@
 streamlit
+fastapi
+uvicorn
+python-multipart
+anthropic
+pydantic
+python-dotenv
+Pillow
 requests
