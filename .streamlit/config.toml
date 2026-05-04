@@ -1,0 +1,13 @@
+[theme]
+# SunProof AI — warm "stone in afternoon sun" palette.
+# The orange primary keeps the brand feel; verdict badges (success/error/
+# warning) use Streamlit's stock green/red/yellow and remain visually distinct.
+primaryColor = "#E97F22"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FAF7F2"
+textColor = "#1F2937"
+font = "sans serif"
+base = "light"
+
+[browser]
+gatherUsageStats = false

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(python -c \"import streamlit; print\\(streamlit.__version__\\)\")"
+      "PowerShell(python -c \"import streamlit; print\\(streamlit.__version__\\)\")",
+      "Bash(python -m streamlit run app.py --server.headless true --server.port 8503)"
     ]
   }
 }

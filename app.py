@@ -1,6 +1,10 @@
 import mimetypes
 import streamlit as st
 from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+from PIL import Image, ExifTags
 
 try:
     import requests as _requests
@@ -24,6 +28,12 @@ if "submitted_image" not in st.session_state:
     st.session_state.submitted_image = None
 if "submitted_inputs" not in st.session_state:
     st.session_state.submitted_inputs = None
+if "sample_image_bytes" not in st.session_state:
+    st.session_state.sample_image_bytes = None
+if "sample_filename" not in st.session_state:
+    st.session_state.sample_filename = None
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 BACKEND_URL = "http://localhost:8000"
 
@@ -31,6 +41,114 @@ MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ]
+
+# ── Demo samples ──────────────────────────────────────────────
+# One-click presets that load a test image and pre-fill the form so the
+# three verdict states are reachable without uploading anything.
+SAMPLES_DIR = Path(__file__).parent / "test_images"
+
+SAMPLES = [
+    {
+        "label": "✅  Consistent",
+        "filename": "direct_sun.PNG",
+        "address": "Bygdøy allé 30, Oslo",
+        "orientation": "S",
+        "month": "July",
+        "help": "South-facing facade in summer with bright direct sun — the geometry checks out.",
+    },
+    {
+        "label": "🚨  Possibly Misleading",
+        "filename": "golden_hour.PNG",
+        "address": "Karl Johans gate 1, Oslo",
+        "orientation": "N",
+        "month": "July",
+        "help": "Warm low-angle light claimed for a north-facing facade — geometrically impossible.",
+    },
+    {
+        "label": "⚠️  Inconclusive",
+        "filename": "normal.jpg",
+        "address": "Markveien 35, Grünerløkka, Oslo",
+        "orientation": "E",
+        "month": "October",
+        "help": "Diffuse autumn lighting on an east-facing facade — not enough evidence to judge.",
+    },
+]
+
+# ══════════════════════════════════════════════════════════════
+# EXIF EXTRACTION — pure-frontend, best-effort
+# ══════════════════════════════════════════════════════════════
+# Tag IDs are integer constants from the EXIF spec; using them directly
+# avoids needing the ExifTags.IFD enum (Pillow ≥ 8.4) on older installs.
+_EXIF_IFD_POINTER = 0x8769
+_GPS_IFD_POINTER  = 0x8825
+_TAG_DATETIME_ORIGINAL = 0x9003
+_TAG_DATETIME          = 0x0132
+_TAG_MAKE              = 0x010F
+_TAG_MODEL             = 0x0110
+
+
+def _gps_dms_to_decimal(dms, ref):
+    """Convert ((deg,min,sec) rationals, 'N'/'S'/'E'/'W' ref) → signed decimal degrees."""
+    if not dms or not ref:
+        return None
+    try:
+        deg, mn, sec = (float(x) for x in dms)
+        decimal = deg + mn / 60.0 + sec / 3600.0
+        return -decimal if ref in ("S", "W") else decimal
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_photo_metadata(image_bytes):
+    """Pull capture datetime, camera make/model, and GPS from image EXIF.
+
+    Returns a dict with keys capture_dt, camera, gps. Values are None when
+    the corresponding tags are missing or unreadable. Never raises.
+    """
+    out = {"capture_dt": None, "camera": None, "gps": None}
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        exif = img.getexif()
+    except Exception:
+        return out
+    if not exif:
+        return out
+
+    # ── Capture datetime ─────────────────────────────────────
+    dt_str = None
+    try:
+        exif_ifd = exif.get_ifd(_EXIF_IFD_POINTER)
+        dt_str = exif_ifd.get(_TAG_DATETIME_ORIGINAL)
+    except Exception:
+        pass
+    if not dt_str:
+        dt_str = exif.get(_TAG_DATETIME)
+    if dt_str:
+        try:
+            out["capture_dt"] = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+        except (ValueError, TypeError):
+            pass
+
+    # ── Camera make + model ──────────────────────────────────
+    make  = (exif.get(_TAG_MAKE)  or "").strip()
+    model = (exif.get(_TAG_MODEL) or "").strip()
+    camera = " ".join(s for s in (make, model) if s).strip()
+    if camera:
+        out["camera"] = camera
+
+    # ── GPS coordinates ──────────────────────────────────────
+    try:
+        gps_ifd = exif.get_ifd(_GPS_IFD_POINTER)
+        if gps_ifd:
+            lat = _gps_dms_to_decimal(gps_ifd.get(2), gps_ifd.get(1))
+            lon = _gps_dms_to_decimal(gps_ifd.get(4), gps_ifd.get(3))
+            if lat is not None and lon is not None:
+                out["gps"] = (lat, lon)
+    except Exception:
+        pass
+
+    return out
+
 
 # ══════════════════════════════════════════════════════════════
 # BACKEND CALL — tries FastAPI first, falls back to mock
@@ -115,9 +233,82 @@ def show_input_page():
         type=["jpg", "jpeg", "png"],
         help="Upload the AI-edited listing photo you want to verify.",
         label_visibility="collapsed",
+        key=f"uploader_{st.session_state.uploader_key}",
     )
-    if uploaded_file:
-        st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+
+    # Resolve which image is "active": manual upload wins, else the sample.
+    if uploaded_file is not None:
+        active_image = uploaded_file.getvalue()
+        active_filename = uploaded_file.name
+    elif st.session_state.sample_image_bytes is not None:
+        active_image = st.session_state.sample_image_bytes
+        active_filename = f"Sample · {st.session_state.sample_filename}"
+    else:
+        active_image = None
+        active_filename = None
+
+    if active_image is not None:
+        st.image(active_image, caption=active_filename, use_container_width=True)
+
+        # ── Photo metadata (EXIF) ─────────────────────────────
+        # Only renders when the image actually carries EXIF tags. Sample
+        # PNGs and screenshots typically have none → block stays hidden.
+        meta = extract_photo_metadata(active_image)
+        if any(meta.values()):
+            with st.expander("📷  Photo metadata", expanded=True):
+                if meta["capture_dt"]:
+                    dt = meta["capture_dt"]
+                    st.markdown(
+                        f"📅 &nbsp; **Captured:** {dt.strftime('%B %d, %Y · %H:%M')}",
+                        unsafe_allow_html=True,
+                    )
+                    inferred_month = MONTHS[dt.month - 1]
+                    if st.session_state.get("month") != inferred_month:
+                        if st.button(
+                            f"Use this month ({inferred_month})",
+                            key="use_exif_month",
+                            help="Sets 'Month to check' below to match the photo's capture month.",
+                        ):
+                            st.session_state.month = inferred_month
+                            st.rerun()
+
+                if meta["camera"]:
+                    st.markdown(f"📷 &nbsp; **Camera:** {meta['camera']}", unsafe_allow_html=True)
+
+                if meta["gps"]:
+                    lat, lon = meta["gps"]
+                    maps_url = (
+                        f"https://www.google.com/maps/search/?api=1"
+                        f"&query={lat:.6f},{lon:.6f}"
+                    )
+                    st.markdown(
+                        f"📍 &nbsp; **GPS in photo:** {lat:.6f}, {lon:.6f} "
+                        f"&nbsp; · &nbsp; [View on Google Maps ↗]({maps_url})",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        "Sanity-check: this should roughly match the address you enter below."
+                    )
+
+    # ── Demo sample buttons ───────────────────────────────────
+    st.caption("Or load one of the prepared demo cases:")
+    sample_cols = st.columns(len(SAMPLES))
+    for col, sample in zip(sample_cols, SAMPLES):
+        with col:
+            if st.button(
+                sample["label"],
+                use_container_width=True,
+                help=sample["help"],
+                key=f"sample_{sample['filename']}",
+            ):
+                with open(SAMPLES_DIR / sample["filename"], "rb") as f:
+                    st.session_state.sample_image_bytes = f.read()
+                st.session_state.sample_filename = sample["filename"]
+                st.session_state.address = sample["address"]
+                st.session_state.orientation = sample["orientation"]
+                st.session_state.month = sample["month"]
+                st.session_state.uploader_key += 1  # clear any manual upload
+                st.rerun()
 
     st.divider()
 
@@ -127,6 +318,7 @@ def show_input_page():
     address = st.text_input(
         "Street address",
         placeholder="e.g. Bygdøy allé 30, Oslo",
+        key="address",
     )
 
     col1, col2 = st.columns(2)
@@ -136,6 +328,7 @@ def show_input_page():
             options=["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
             index=4,
             help="The compass direction the facade or balcony faces.",
+            key="orientation",
         )
     with col2:
         month = st.selectbox(
@@ -143,30 +336,31 @@ def show_input_page():
             options=MONTHS,
             index=datetime.now().month - 1,
             help="Defaults to the current month.",
+            key="month",
         )
 
     st.divider()
 
     if st.button("Check sun conditions", type="primary", use_container_width=True):
-        if not uploaded_file:
-            st.warning("Please upload a listing photo before checking.")
+        if active_image is None:
+            st.warning("Please upload a listing photo or load a demo sample before checking.")
         elif not address.strip():
             st.warning("Please enter a street address.")
         else:
             with st.spinner("Analysing photo and calculating solar position..."):
                 result = call_backend(
-                    image_bytes=uploaded_file.getvalue(),
+                    image_bytes=active_image,
                     address=address.strip(),
                     orientation=orientation,
                     month=month,
                 )
             st.session_state.result = result
-            st.session_state.submitted_image = uploaded_file.getvalue()
+            st.session_state.submitted_image = active_image
             st.session_state.submitted_inputs = {
                 "address": address.strip(),
                 "orientation": orientation,
                 "month": month,
-                "filename": uploaded_file.name,
+                "filename": active_filename,
             }
             st.session_state.page = "results"
             st.rerun()
@@ -245,6 +439,9 @@ def show_results_page():
         st.session_state.result = None
         st.session_state.submitted_image = None
         st.session_state.submitted_inputs = None
+        st.session_state.sample_image_bytes = None
+        st.session_state.sample_filename = None
+        st.session_state.uploader_key += 1
         st.rerun()
 
 
