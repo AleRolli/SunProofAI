@@ -60,7 +60,7 @@ def geocode_address(address_str: str) -> tuple[float, float]:
     Results are cached in memory so repeated calls don't hit the API.
 
     Args:
-        address_str: e.g. "Aker Brygge, Oslo" or "Bygdøy allé 5, Oslo"
+        address_str: e.g. "Karl Johans gate 22, Oslo" or "Aker Brygge, Oslo"
 
     Returns:
         (latitude, longitude) as floats
@@ -68,40 +68,66 @@ def geocode_address(address_str: str) -> tuple[float, float]:
     Raises:
         ValueError: if the address cannot be found
     """
-    # Return cached result if we have it
     key = address_str.strip().lower()
     if key in _geocache:
         return _geocache[key]
 
-    # Call Nominatim (OpenStreetMap's free geocoder)
     url = "https://nominatim.openstreetmap.org/search"
-    params = {
+    headers = {"User-Agent": "SunProofAI/1.0 (student project)"}
+
+    # Build a list of query strategies to try in order.
+    # Structured search (street + city) is more precise for exact addresses;
+    # free-text is the fallback for landmarks and ambiguous inputs.
+    parts = [p.strip() for p in address_str.split(",")]
+    attempts: list[dict] = []
+
+    if len(parts) >= 2:
+        # Structured: lets Nominatim match street number exactly
+        attempts.append({
+            "street": parts[0],
+            "city": ",".join(parts[1:]),
+            "format": "json",
+            "limit": 1,
+            "countrycodes": "no",
+        })
+
+    # Free-text with Norway filter
+    attempts.append({
         "q": address_str,
         "format": "json",
         "limit": 1,
-        "countrycodes": "no",       # bias toward Norway
-        "addressdetails": 0,
-    }
-    headers = {"User-Agent": "SunProofAI/1.0 (student project)"}
+        "countrycodes": "no",
+    })
 
-    try:
-        time.sleep(1)               # Nominatim rate-limit: max 1 req/sec
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        results = response.json()
-    except requests.RequestException as e:
-        raise ValueError(f"Geocoding network error for '{address_str}': {e}")
+    # Last resort: no country restriction (catches edge cases)
+    attempts.append({
+        "q": address_str,
+        "format": "json",
+        "limit": 1,
+    })
 
-    if not results:
-        raise ValueError(
-            f"Address not found: '{address_str}'. "
-            "Try adding city name, e.g. 'Aker Brygge, Oslo'."
-        )
+    last_error: Exception | None = None
+    for i, params in enumerate(attempts):
+        if i > 0:
+            time.sleep(1)           # Nominatim rate-limit: max 1 req/sec
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            results = response.json()
+            if results:
+                lat = float(results[0]["lat"])
+                lon = float(results[0]["lon"])
+                _geocache[key] = (lat, lon)
+                return (lat, lon)
+        except requests.RequestException as e:
+            last_error = e
 
-    lat = float(results[0]["lat"])
-    lon = float(results[0]["lon"])
-    _geocache[key] = (lat, lon)
-    return (lat, lon)
+    if last_error:
+        raise ValueError(f"Geocoding network error for '{address_str}': {last_error}")
+    raise ValueError(
+        f"Address not found: '{address_str}'. "
+        "Try the format 'Street Name 5, City', e.g. 'Karl Johans gate 22, Oslo'."
+    )
 
 
 # ---------------------------------------------------------------------------
