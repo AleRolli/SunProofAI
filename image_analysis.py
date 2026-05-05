@@ -28,7 +28,6 @@ from pydantic import BaseModel
 #   None   → unclear  (Gabriel uses this to trigger the "Inconclusive" path)
 
 class SunAnalysis(BaseModel):
-    sun_direction: Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW", "unclear"]
     sun_elevation: Literal["low", "medium", "high", "unclear"]
     lighting: Literal["direct", "diffuse", "overcast"]
     shadows_visible: Optional[bool]   # None = unclear
@@ -45,14 +44,6 @@ Your sole task is to analyze real-estate listing photos and output a \
 structured assessment of the sun and lighting conditions visible in the image.
 
 Field definitions:
-
-sun_direction
-  The compass direction FROM WHICH the dominant light is arriving — i.e. where \
-  the sun sits in the sky when the photo was taken. Use the 8-point compass: \
-  N, NE, E, SE, S, SW, W, NW. Evidence to look for: the direction cast shadows \
-  point away from, the position of bright sky or sun glare in the frame, the \
-  angle of highlights on vertical surfaces. Return "unclear" for interior shots, \
-  overcast scenes, or any image where the light direction cannot be estimated.
 
 sun_elevation
   The apparent height of the sun above the horizon:
@@ -188,7 +179,6 @@ if __name__ == "__main__":
         print("Usage: python image_analysis.py <path/to/image.jpg>")
         print("\nExample output:")
         print(json.dumps({
-            "sun_direction": "SW",
             "sun_elevation": "medium",
             "lighting": "direct",
             "shadows_visible": True,
