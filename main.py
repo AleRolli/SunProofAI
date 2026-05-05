@@ -81,25 +81,47 @@ async def analyze_property(
     verdict = "Inconclusive"
     explanation = "Not enough clear evidence in the photo."
 
-    # Count unclear fields based on Ole's 5-field contract
+    # Count unclear fields based on Ole's 4-field contract
     unclear_count = sum([
-        vlm_data.get("sun_direction") == "unclear",
         vlm_data.get("sun_elevation") == "unclear",
         vlm_data.get("lighting") == "overcast",
         vlm_data.get("shadows_visible") is None,
         vlm_data.get("sun_on_facade") is None
     ])
 
+    # Pre-compute whether the facade's solar window includes golden-hour slots.
+    # Low-angle sun only occurs before 09:00 or after 19:00; if the window has
+    # no such hours, a sunset/sunrise photo on that facade is impossible.
+    best_times = solar_data.get("best_sun_times", [])
+    has_golden_hour = any(
+        int(t.split(":")[0]) < 9 or int(t.split(":")[0]) >= 19
+        for t in best_times
+    )
+
     # Scenario A: The photo is too blurry, or lacks sufficient clear evidence
-    if vlm_data.get("sun_direction") == "unclear" or unclear_count >= 2:
+    if unclear_count >= 2:
         verdict = "Inconclusive"
         explanation = "The image lighting is too ambiguous or lacks sufficient clear evidence to confidently verify."
-    
-    # Scenario B: The photo shows sun where physics says it's impossible
+
+    # Scenario B1: The photo shows sun where physics says it's impossible
     elif vlm_data.get("sun_on_facade") is True and solar_data.get("facade_receives_sun") is False:
         verdict = "Possibly misleading"
         explanation = f"Photo shows sun, but calculations show {orientation} faces get no sun in {month}."
-    
+
+    # Scenario B2: Photo shows low-angle golden-hour light but the facade's
+    # solar window never includes those hours — the light is geometrically wrong.
+    elif (
+        vlm_data.get("sun_elevation") == "low"
+        and vlm_data.get("sun_on_facade") is True
+        and not has_golden_hour
+    ):
+        window = f"{best_times[0]}–{best_times[-1]}" if best_times else "a limited window"
+        verdict = "Possibly misleading"
+        explanation = (
+            f"Photo shows low-angle golden-hour light, but a {orientation}-facing facade "
+            f"in {month} only receives sun between {window} — not during sunrise or sunset hours."
+        )
+
     # Scenario C: Everything matches
     else:
         verdict = "Consistent"
