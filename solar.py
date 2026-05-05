@@ -1,7 +1,7 @@
 # solar.py — Ferdinand, Solar Engine Lead
 # SunProof AI — Geocoding + Solar Calculation Module
 #
-# pip install pysolar requests
+# pip install pysolar requests timezonefinder
 #
 # Usage:
 #   python solar.py                    <- runs built-in tests
@@ -12,40 +12,54 @@ warnings.filterwarnings("ignore")  # suppress pysolar leap-second warning
 
 import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from pysolar.solar import get_altitude, get_azimuth
 
-_OSLO_TZ = ZoneInfo("Europe/Oslo")
+try:
+    from timezonefinder import TimezoneFinder as _TF
+    _tf = _TF()
+except ImportError:
+    _tf = None
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Facade direction -> the azimuth range (degrees) from which that facade receives sun.
-#
-# These ranges are calibrated for Norwegian latitudes (~59-70°N) where the sun
-# arcs across the southern sky and never reaches true north at meaningful altitudes.
-# A south-facing wall receives sun across a wide arc (90°–270°);
-# a north-facing wall receives essentially zero direct sun year-round.
+# Facade direction -> azimuth range (degrees) from which that facade receives sun.
+# These are standard compass arcs and work at any latitude/hemisphere.
+# pysolar's azimuth output is hemisphere-aware, so the math is correct globally.
 #
 # Range format: (lo, hi) — sun azimuth must be between lo and hi.
-# Ranges that wrap around north (e.g. NW: 225–45) use lo > hi and are
-# handled with the "az >= lo OR az <= hi" check below.
+# Ranges that wrap around north (lo > hi) use "az >= lo OR az <= hi".
 FACADE_RANGES = {
-    "N":  (315,  45),   # sun never reaches this arc in Norway -> always 0h
-    "NE": (315, 135),   # morning sun, wraps through north
-    "E":  (  0, 180),   # morning sun
-    "SE": ( 45, 225),   # morning + midday sun
-    "S":  ( 90, 270),   # broadest window — morning through afternoon
-    "SW": (135, 315),   # midday + afternoon sun
-    "W":  (180, 360),   # afternoon + evening sun
-    "NW": (225,  45),   # evening sun, wraps through north
+    "N":  (315,  45),
+    "NE": (315, 135),
+    "E":  (  0, 180),
+    "SE": ( 45, 225),
+    "S":  ( 90, 270),
+    "SW": (135, 315),
+    "W":  (180, 360),
+    "NW": (225,  45),
 }
 
 # Simple in-memory geocoding cache — avoids re-calling Nominatim for same address
 _geocache: dict[str, tuple[float, float]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _timezone_for(lat: float, lon: float):
+    """Look up the local timezone from coordinates, fall back to longitude offset."""
+    if _tf is not None:
+        tz_name = _tf.timezone_at(lat=lat, lng=lon)
+        if tz_name:
+            return ZoneInfo(tz_name)
+    # Fallback when timezonefinder is not installed: approximate from longitude
+    return timezone(timedelta(hours=round(lon / 15)))
 
 
 # ---------------------------------------------------------------------------
@@ -56,11 +70,11 @@ def geocode_address(address_str: str) -> tuple[float, float]:
     """
     Convert a human-readable address to (latitude, longitude).
 
-    Uses OpenStreetMap Nominatim — free, no API key required.
+    Uses OpenStreetMap Nominatim — free, no API key required, works worldwide.
     Results are cached in memory so repeated calls don't hit the API.
 
     Args:
-        address_str: e.g. "Karl Johans gate 22, Oslo" or "Aker Brygge, Oslo"
+        address_str: e.g. "10 Downing Street, London" or "Eiffel Tower, Paris"
 
     Returns:
         (latitude, longitude) as floats
@@ -75,31 +89,19 @@ def geocode_address(address_str: str) -> tuple[float, float]:
     url = "https://nominatim.openstreetmap.org/search"
     headers = {"User-Agent": "SunProofAI/1.0 (student project)"}
 
-    # Build a list of query strategies to try in order.
     # Structured search (street + city) is more precise for exact addresses;
     # free-text is the fallback for landmarks and ambiguous inputs.
     parts = [p.strip() for p in address_str.split(",")]
     attempts: list[dict] = []
 
     if len(parts) >= 2:
-        # Structured: lets Nominatim match street number exactly
         attempts.append({
             "street": parts[0],
             "city": ",".join(parts[1:]),
             "format": "json",
             "limit": 1,
-            "countrycodes": "no",
         })
 
-    # Free-text with Norway filter
-    attempts.append({
-        "q": address_str,
-        "format": "json",
-        "limit": 1,
-        "countrycodes": "no",
-    })
-
-    # Last resort: no country restriction (catches edge cases)
     attempts.append({
         "q": address_str,
         "format": "json",
@@ -126,7 +128,7 @@ def geocode_address(address_str: str) -> tuple[float, float]:
         raise ValueError(f"Geocoding network error for '{address_str}': {last_error}")
     raise ValueError(
         f"Address not found: '{address_str}'. "
-        "Try the format 'Street Name 5, City', e.g. 'Karl Johans gate 22, Oslo'."
+        "Try the format 'Street Name, City, Country', e.g. '5 Avenue Anatole France, Paris, France'."
     )
 
 
@@ -145,11 +147,12 @@ def get_solar_window(
 
     Checks every hour of a representative day (15th of the month) and
     counts hours where the sun is above the horizon AND in the arc
-    that the facade faces.
+    that the facade faces. Times are shown in the local timezone for the
+    given coordinates.
 
     Args:
-        lat:              latitude (e.g. 59.91 for Oslo)
-        lon:              longitude (e.g. 10.75 for Oslo)
+        lat:              latitude (e.g. 48.86 for Paris)
+        lon:              longitude (e.g. 2.35 for Paris)
         facade_direction: compass point string — one of:
                           "N", "NE", "E", "SE", "S", "SW", "W", "NW"
         month:            integer 1–12
@@ -174,6 +177,7 @@ def get_solar_window(
 
     lo, hi = FACADE_RANGES[direction]
     year = datetime.now().year
+    local_tz = _timezone_for(lat, lon)  # auto-detected from coordinates
 
     sun_hours: list[str] = []
     rise_az: float | None = None
@@ -187,17 +191,14 @@ def get_solar_window(
 
         above_horizon = altitude > 0
 
-        # Detect sunrise
         if above_horizon and not prev_above:
             rise_az = round(azimuth, 1)
-        # Detect sunset
         if not above_horizon and prev_above:
             set_az = round(azimuth, 1)
 
         prev_above = above_horizon
 
         if above_horizon:
-            # Check if sun azimuth is within the facade's receiving arc
             if lo < hi:
                 in_arc = lo <= azimuth <= hi
             else:
@@ -205,13 +206,12 @@ def get_solar_window(
                 in_arc = azimuth >= lo or azimuth <= hi
 
             if in_arc:
-                local_hour = dt.astimezone(_OSLO_TZ).hour
+                local_hour = dt.astimezone(local_tz).hour
                 sun_hours.append(f"{local_hour:02d}:00")
 
     hours_count = len(sun_hours)
     receives = hours_count > 0
 
-    # Build a plain-English note for Gabriel / the report
     month_name = datetime(year, month, 1).strftime("%B")
     if not receives:
         notes = (
@@ -260,3 +260,30 @@ def analyze_address(address_str: str, facade_direction: str, month: int) -> dict
     result["lat"] = round(lat, 5)
     result["lon"] = round(lon, 5)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Built-in tests
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    tests = [
+        ("Karl Johans gate 22, Oslo, Norway",      "S",  6),
+        ("Eiffel Tower, Paris, France",             "S",  6),
+        ("10 Downing Street, London, UK",           "W",  7),
+        ("Sydney Opera House, Sydney, Australia",   "N",  12),
+        ("Times Square, New York, USA",             "SE", 9),
+        ("Shibuya Crossing, Tokyo, Japan",          "E",  3),
+    ]
+
+    for address, direction, month in tests:
+        print(f"\n{'='*60}")
+        print(f"Address  : {address}")
+        print(f"Facade   : {direction}   Month: {month}")
+        try:
+            r = analyze_address(address, direction, month)
+            print(f"Coords   : {r['lat']}, {r['lon']}")
+            print(f"Sun hours: {r['hours_facade_receives_sun']}")
+            print(f"Notes    : {r['notes']}")
+        except ValueError as e:
+            print(f"ERROR: {e}")
