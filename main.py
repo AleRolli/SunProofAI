@@ -86,7 +86,8 @@ async def analyze_property(
         vlm_data.get("sun_elevation") == "unclear",
         vlm_data.get("lighting") == "overcast",
         vlm_data.get("shadows_visible") is None,
-        vlm_data.get("sun_on_facade") is None
+        vlm_data.get("sun_on_facade") is None 
+
     ])
 
     # Pre-compute whether the facade's solar window includes golden-hour slots.
