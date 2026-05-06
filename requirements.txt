@@ -7,4 +7,3 @@ pydantic
 python-dotenv
 Pillow
 requests
-pysolar
