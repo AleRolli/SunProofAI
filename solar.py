@@ -245,6 +245,52 @@ def get_solar_window(
 
 
 # ---------------------------------------------------------------------------
+# Function 3: Sun elevation at a specific time
+# ---------------------------------------------------------------------------
+
+def get_sun_elevation_at_time(lat: float, lon: float, local_hour: int, month: int) -> dict:
+    """
+    Return the solar altitude at a specific local hour on the 15th of the month.
+
+    elevation_category uses the same vocabulary as the VLM's sun_elevation field:
+      "low"           — altitude < 15°  (golden-hour / blue-hour light)
+      "medium"        — 15° ≤ alt < 45° (mid-morning or mid-afternoon)
+      "high"          — altitude ≥ 45°  (near-midday, short shadows)
+      "below_horizon" — sun has not risen or has already set
+
+    Args:
+        lat, lon:    coordinates of the property
+        local_hour:  hour of day in local time (0–23)
+        month:       integer 1–12
+
+    Returns:
+        dict with keys:
+            altitude_deg       (float) — solar altitude in degrees
+            elevation_category (str)   — "low" | "medium" | "high" | "below_horizon"
+    """
+    local_tz = _timezone_for(lat, lon)
+    year = datetime.now().year
+    local_dt = datetime(year, month, 15, local_hour, 0, 0, tzinfo=local_tz)
+    utc_dt = local_dt.astimezone(timezone.utc)
+
+    altitude = get_altitude(lat, lon, utc_dt)
+
+    if altitude <= 0:
+        category = "below_horizon"
+    elif altitude < 15:
+        category = "low"
+    elif altitude < 45:
+        category = "medium"
+    else:
+        category = "high"
+
+    return {
+        "altitude_deg": round(altitude, 1),
+        "elevation_category": category,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Quick helper: address + direction + month in one call (Gabriel uses this)
 # ---------------------------------------------------------------------------
 

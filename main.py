@@ -3,8 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import anthropic
 
-from image_analysis import analyze_image  # Ole's Vision API
-from solar import analyze_address         # Ferdinand's Solar/Geocoding API
+from image_analysis import analyze_image                      # Ole's Vision API
+from solar import analyze_address, get_sun_elevation_at_time  # Ferdinand's Solar/Geocoding API
 
 app = FastAPI()
 
@@ -33,6 +33,20 @@ MONTH_MAP = {
     "September": 9, "October": 10, "November": 11, "December": 12
 }
 
+# Approximate hour ranges during which each facade can receive direct sun.
+# Broad enough to cover seasonal variation; precise check is done by solar.py.
+# None = orientation never gets direct sun at mid-latitudes.
+SUN_WINDOWS: dict[str, tuple[int, int] | None] = {
+    "N":  None,
+    "NE": (4, 10),
+    "E":  (5, 13),
+    "SE": (7, 15),
+    "S":  (9, 17),
+    "SW": (11, 19),
+    "W":  (13, 21),
+    "NW": (17, 22),
+}
+
 # ── 3. Public Endpoints ────────────────────────────────────
 
 @app.get("/health")
@@ -44,7 +58,8 @@ async def analyze_property(
     image: UploadFile = File(...),
     address: str = Form(...),
     orientation: str = Form(...),
-    month: str = Form(...)
+    month: str = Form(...),
+    photo_time: str = Form(default=""),
 ):
     # 1. Read image bytes
     image_bytes = await image.read()
@@ -112,6 +127,83 @@ async def analyze_property(
         for t in best_times
     )
 
+    # Pre-compute time-based verdict BEFORE the elif chain so both the elevation
+    # check (real solar math) and the coarse window check can inform a single branch.
+    _time_verdict: str | None = None
+    _time_explanation = ""
+
+    if photo_time and sun_present:
+        try:
+            _photo_hour_int = int(photo_time.split(":")[0])
+            _lat = solar_data.get("lat")
+            _lon = solar_data.get("lon")
+            _observed_elev = vlm_data.get("sun_elevation")
+
+            # Priority 1: compare the elevation the VLM sees to the real solar altitude.
+            if _lat is not None and _lon is not None and _observed_elev not in (None, "unclear"):
+                _elev = get_sun_elevation_at_time(_lat, _lon, _photo_hour_int, month_int)
+                _expected_cat = _elev["elevation_category"]
+
+                if _expected_cat == "below_horizon":
+                    _time_verdict = "Possibly misleading"
+                    _time_explanation = (
+                        f"Photo taken at {photo_time}, but the sun is below the horizon "
+                        f"at that time at this location in {month}."
+                    )
+                elif _expected_cat != _observed_elev:
+                    _time_verdict = "Possibly misleading"
+                    _time_explanation = (
+                        f"The sun appears {_observed_elev} in the photo, but at {photo_time} "
+                        f"in {month} the calculated solar elevation is {_elev['altitude_deg']}° "
+                        f"— consistent with {_expected_cat} light, not {_observed_elev}."
+                    )
+
+            # Priority 2: window check using the real pysolar result so the
+            # reported window matches the solar summary exactly.
+            if _time_verdict is None:
+                if best_times:
+                    _real_start = int(best_times[0].split(":")[0])
+                    _real_end   = int(best_times[-1].split(":")[0])
+                    if not (_real_start <= _photo_hour_int <= _real_end):
+                        _time_verdict = "Possibly misleading"
+                        _time_explanation = (
+                            f"Photo taken at {photo_time}, but this {orientation}-facing facade "
+                            f"only receives direct sun between {best_times[0]} and "
+                            f"{best_times[-1]} in {month}."
+                        )
+                    else:
+                        _time_verdict = "Consistent"
+                        _time_explanation = (
+                            f"The photo time ({photo_time}) falls within the calculated sun window "
+                            f"for this {orientation}-facing facade ({best_times[0]}–{best_times[-1]})."
+                        )
+                else:
+                    # Fallback: no real sun hours means facade_receives_sun is False,
+                    # normally caught by B1 — use SUN_WINDOWS as a safety net.
+                    _sun_window = SUN_WINDOWS.get(orientation)
+                    if _sun_window is None:
+                        _time_verdict = "Possibly misleading"
+                        _time_explanation = (
+                            f"Photo taken at {photo_time} appears to show direct sunlight, but "
+                            f"{orientation}-facing facades do not receive direct sun at mid-latitudes."
+                        )
+                    elif not (_sun_window[0] <= _photo_hour_int < _sun_window[1]):
+                        _time_verdict = "Possibly misleading"
+                        _time_explanation = (
+                            f"Photo taken at {photo_time}, but {orientation}-facing facades typically "
+                            f"only receive direct sun between {_sun_window[0]:02d}:00 and "
+                            f"{_sun_window[1]:02d}:00."
+                        )
+                    else:
+                        _time_verdict = "Consistent"
+                        _time_explanation = (
+                            f"The photo time ({photo_time}) falls within the expected sun window "
+                            f"for a {orientation}-facing facade "
+                            f"({_sun_window[0]:02d}:00–{_sun_window[1]:02d}:00)."
+                        )
+        except (ValueError, IndexError):
+            pass  # malformed photo_time — skip time checks
+
     # Scenario A: Image too ambiguous to judge
     if unclear_count >= 2:
         verdict = "Inconclusive"
@@ -136,6 +228,11 @@ async def analyze_property(
             f"Photo shows low-angle golden-hour light, but a {orientation}-facing facade "
             f"in {month} only receives sun between {window} — not during sunrise or sunset hours."
         )
+
+    # Scenario T/E: time + solar-elevation cross-check
+    elif _time_verdict is not None:
+        verdict = _time_verdict
+        explanation = _time_explanation
 
     # Scenario C: Evidence is consistent with the stated orientation
     else:

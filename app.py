@@ -35,6 +35,8 @@ if "sample_filename" not in st.session_state:
     st.session_state.sample_filename = None
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
+if "photo_hour" not in st.session_state:
+    st.session_state.photo_hour = "Not specified"
 
 def _resolve_backend_url() -> str:
     """Pick a backend URL from env var → st.secrets → localhost default.
@@ -70,15 +72,17 @@ SAMPLES = [
         "address": "Bygdøy allé 30, Oslo",
         "orientation": "S",
         "month": "July",
+        "photo_hour": "13:00",
         "help": "South-facing facade in summer with bright direct sun — the geometry checks out.",
     },
     {
         "label": "🚨  Possibly Misleading",
         "filename": "golden_hour.PNG",
         "address": "Karl Johans gate 1, Oslo",
-        "orientation": "N",
+        "orientation": "E",
         "month": "July",
-        "help": "Warm low-angle light claimed for a north-facing facade — geometrically impossible.",
+        "photo_hour": "17:00",
+        "help": "East-facing facade with sun shown at 17:00 — east facades only get morning sun.",
     },
     {
         "label": "⚠️  Inconclusive",
@@ -86,6 +90,7 @@ SAMPLES = [
         "address": "Markveien 35, Grünerløkka, Oslo",
         "orientation": "E",
         "month": "October",
+        "photo_hour": "Not specified",
         "help": "Diffuse autumn lighting on an east-facing facade — not enough evidence to judge.",
     },
 ]
@@ -169,13 +174,18 @@ def extract_photo_metadata(image_bytes):
 # ══════════════════════════════════════════════════════════════
 # BACKEND CALL — tries FastAPI first, falls back to mock
 # ══════════════════════════════════════════════════════════════
-def call_backend(image_bytes, address, orientation, month):
+def call_backend(image_bytes, address, orientation, month, photo_time: str = ""):
     if _requests is not None:
         try:
             response = _requests.post(
                 f"{BACKEND_URL}/analyze",
                 files={"image": ("photo.jpg", image_bytes, "image/jpeg")},
-                data={"address": address, "orientation": orientation, "month": month},
+                data={
+                    "address": address,
+                    "orientation": orientation,
+                    "month": month,
+                    "photo_time": photo_time,
+                },
                 timeout=30,
             )
             response.raise_for_status()
@@ -322,6 +332,16 @@ def show_input_page():
                             st.session_state.month = inferred_month
                             st.rerun()
 
+                    inferred_hour = f"{dt.hour:02d}:00"
+                    if st.session_state.get("photo_hour") != inferred_hour:
+                        if st.button(
+                            f"Use this hour ({inferred_hour})",
+                            key="use_exif_hour",
+                            help="Sets 'Hour photo was taken' below to match the photo's capture time.",
+                        ):
+                            st.session_state.photo_hour = inferred_hour
+                            st.rerun()
+
                 if meta["camera"]:
                     st.markdown(f"📷 &nbsp; **Camera:** {meta['camera']}", unsafe_allow_html=True)
 
@@ -357,6 +377,7 @@ def show_input_page():
                 st.session_state.address = sample["address"]
                 st.session_state.orientation = sample["orientation"]
                 st.session_state.month = sample["month"]
+                st.session_state.photo_hour = sample.get("photo_hour", "Not specified")
                 st.session_state.uploader_key += 1  # clear any manual upload
                 st.rerun()
 
@@ -371,7 +392,7 @@ def show_input_page():
         key="address",
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         orientation = st.selectbox(
             "Facade / balcony orientation",
@@ -388,6 +409,14 @@ def show_input_page():
             help="Defaults to the current month.",
             key="month",
         )
+    with col3:
+        _hour_options = ["Not specified"] + [f"{h:02d}:00" for h in range(24)]
+        photo_hour = st.selectbox(
+            "Hour photo was taken",
+            options=_hour_options,
+            help="24-hour clock. Leave as 'Not specified' if unknown.",
+            key="photo_hour",
+        )
 
     st.divider()
 
@@ -397,12 +426,14 @@ def show_input_page():
         elif not address.strip():
             st.warning("Please enter a street address.")
         else:
+            photo_time = "" if photo_hour == "Not specified" else photo_hour
             with st.spinner("Analysing photo and calculating solar position..."):
                 result = call_backend(
                     image_bytes=active_image,
                     address=address.strip(),
                     orientation=orientation,
                     month=month,
+                    photo_time=photo_time,
                 )
             st.session_state.result = result
             st.session_state.submitted_image = active_image
@@ -410,6 +441,7 @@ def show_input_page():
                 "address": address.strip(),
                 "orientation": orientation,
                 "month": month,
+                "photo_time": photo_time,
                 "filename": active_filename,
             }
             st.session_state.page = "results"
@@ -431,10 +463,11 @@ def show_results_page():
     verdict = result.get("verdict", "Inconclusive")
 
     st.title("☀️ SunProof AI — Result")
+    _time_part = f"  ·  {inputs['photo_time']}" if inputs.get("photo_time") else ""
     st.caption(
         f"{inputs.get('address', '')}  ·  "
         f"Orientation: {inputs.get('orientation', '')}  ·  "
-        f"{inputs.get('month', '')}"
+        f"{inputs.get('month', '')}{_time_part}"
     )
     st.divider()
 
