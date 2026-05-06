@@ -16,6 +16,27 @@ from datetime import datetime
 from fpdf import FPDF
 
 
+def _safe(text: str) -> str:
+    """Normalize text to Latin-1 for fpdf2's built-in Helvetica font.
+
+    Replaces common typographic Unicode (en/em dashes, smart quotes, ellipsis)
+    with plain ASCII equivalents, then drops any remaining non-Latin-1 characters
+    rather than crashing. Ferdinand's solar summaries use en dashes in time ranges
+    (e.g. "09:00–17:00") which triggered this.
+    """
+    for src, dst in (
+        ("–", "-"),    # en dash  –
+        ("—", "-"),    # em dash  —
+        ("‘", "'"),    # left single quote  '
+        ("’", "'"),    # right single quote '
+        ("“", '"'),    # left double quote  "
+        ("”", '"'),    # right double quote "
+        ("…", "..."),  # ellipsis  …
+    ):
+        text = text.replace(src, dst)
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 # ── Brand palette (mirrors .streamlit/config.toml) ────────────────────────────
 _ORANGE   = (233, 127,  34)   # primaryColor  #E97F22
 _OFFWHITE = (250, 247, 242)   # secondaryBackground #FAF7F2
@@ -46,12 +67,12 @@ def build_report(data: dict) -> bytes:
     Returns:
         Raw PDF bytes.
     """
-    address       = data.get("address",       "—")
-    orientation   = data.get("orientation",   "—")
-    month         = data.get("month",         "—")
-    verdict       = data.get("verdict",       "Inconclusive")
-    explanation   = data.get("explanation",   "")
-    solar_summary = data.get("solar_summary", "")
+    address       = _safe(data.get("address",       "-"))
+    orientation   = _safe(data.get("orientation",   "-"))
+    month         = _safe(data.get("month",         "-"))
+    verdict       =       data.get("verdict",       "Inconclusive")
+    explanation   = _safe(data.get("explanation",   ""))
+    solar_summary = _safe(data.get("solar_summary", ""))
 
     dt        = datetime.now()
     generated = f"{dt.day} {dt.strftime('%B %Y')}"   # e.g. "6 May 2026" — cross-platform
