@@ -81,26 +81,63 @@ async def analyze_property(
     verdict = "Inconclusive"
     explanation = "Not enough clear evidence in the photo."
 
-    # Count unclear fields based on Ole's 5-field contract
+    # Interior window shots legitimately have sun_on_facade=None and
+    # shadows_visible=None — that's not ambiguity, just scene type.
+    is_interior = vlm_data.get("scene_type") == "interior_window"
+
+    # sun_present: sun is visible in the frame OR the facade is clearly lit.
+    # Both are equally strong evidence that sunlight exists in the photo.
+    sun_present = (
+        vlm_data.get("sun_visible_in_frame") is True
+        or vlm_data.get("sun_on_facade") is True
+    )
+
+    # Ambiguity score: only penalise None values when we'd actually expect data.
+    # For interior shots, sun_on_facade and shadows_visible are always None —
+    # don't count them as missing evidence.
     unclear_count = sum([
-        vlm_data.get("sun_direction") == "unclear",
         vlm_data.get("sun_elevation") == "unclear",
         vlm_data.get("lighting") == "overcast",
-        vlm_data.get("shadows_visible") is None,
-        vlm_data.get("sun_on_facade") is None
+        vlm_data.get("shadows_visible") is None and not is_interior,
+        vlm_data.get("sun_on_facade") is None and not is_interior,
+        vlm_data.get("sun_visible_in_frame") is None,
     ])
 
-    # Scenario A: The photo is too blurry, or lacks sufficient clear evidence
-    if vlm_data.get("sun_direction") == "unclear" or unclear_count >= 2:
+    # Golden-hour threshold: true golden-hour light (intense orange, sun near
+    # horizon) only occurs before 07:00 or after 19:00. An 08:00 morning window
+    # start is not sunset-level low-angle light.
+    best_times = solar_data.get("best_sun_times", [])
+    has_golden_hour = any(
+        int(t.split(":")[0]) < 7 or int(t.split(":")[0]) >= 19
+        for t in best_times
+    )
+
+    # Scenario A: Image too ambiguous to judge
+    if unclear_count >= 2:
         verdict = "Inconclusive"
         explanation = "The image lighting is too ambiguous or lacks sufficient clear evidence to confidently verify."
-    
-    # Scenario B: The photo shows sun where physics says it's impossible
-    elif vlm_data.get("sun_on_facade") is True and solar_data.get("facade_receives_sun") is False:
+
+    # Scenario B1: Sun visible in photo but this facade gets zero sun in this month
+    elif sun_present and solar_data.get("facade_receives_sun") is False:
         verdict = "Possibly misleading"
         explanation = f"Photo shows sun, but calculations show {orientation} faces get no sun in {month}."
-    
-    # Scenario C: Everything matches
+
+    # Scenario B2: Photo shows intense golden-hour light but the facade's solar
+    # window never reaches those early/late hours — geometrically impossible.
+    elif (
+        vlm_data.get("sun_elevation") == "low"
+        and vlm_data.get("lighting") == "direct"
+        and sun_present
+        and not has_golden_hour
+    ):
+        window = f"{best_times[0]}–{best_times[-1]}" if best_times else "a limited window"
+        verdict = "Possibly misleading"
+        explanation = (
+            f"Photo shows low-angle golden-hour light, but a {orientation}-facing facade "
+            f"in {month} only receives sun between {window} — not during sunrise or sunset hours."
+        )
+
+    # Scenario C: Evidence is consistent with the stated orientation
     else:
         verdict = "Consistent"
         explanation = "The photo lighting is consistent with the property's orientation."

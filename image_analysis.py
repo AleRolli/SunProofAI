@@ -20,19 +20,18 @@ from pydantic import BaseModel
 
 # ── Output schema ──────────────────────────────────────────────────────────────
 # This is the agreed interface contract between Ole → Gabriel.
-# Gabriel expects exactly these five fields.
-#
-# shadows_visible and sun_on_facade use Optional[bool]:
-#   True   → clearly yes
-#   False  → clearly no
-#   None   → unclear  (Gabriel uses this to trigger the "Inconclusive" path)
+# Optional[bool] fields use three states:
+#   True  → clearly yes
+#   False → clearly no
+#   None  → cannot determine from this image (Gabriel handles each case)
 
 class SunAnalysis(BaseModel):
-    sun_direction: Literal["N", "NE", "E", "SE", "S", "SW", "W", "NW", "unclear"]
     sun_elevation: Literal["low", "medium", "high", "unclear"]
     lighting: Literal["direct", "diffuse", "overcast"]
-    shadows_visible: Optional[bool]   # None = unclear
-    sun_on_facade: Optional[bool]     # None = unclear
+    shadows_visible: Optional[bool]      # None = cannot assess
+    sun_on_facade: Optional[bool]        # None = facade not visible (e.g. interior shot)
+    sun_visible_in_frame: Optional[bool] # None = sun position not determinable
+    scene_type: Literal["exterior_facade", "interior_window", "unclear"]
 
 
 # ── System prompt ──────────────────────────────────────────────────────────────
@@ -45,14 +44,6 @@ Your sole task is to analyze real-estate listing photos and output a \
 structured assessment of the sun and lighting conditions visible in the image.
 
 Field definitions:
-
-sun_direction
-  The compass direction FROM WHICH the dominant light is arriving — i.e. where \
-  the sun sits in the sky when the photo was taken. Use the 8-point compass: \
-  N, NE, E, SE, S, SW, W, NW. Evidence to look for: the direction cast shadows \
-  point away from, the position of bright sky or sun glare in the frame, the \
-  angle of highlights on vertical surfaces. Return "unclear" for interior shots, \
-  overcast scenes, or any image where the light direction cannot be estimated.
 
 sun_elevation
   The apparent height of the sun above the horizon:
@@ -87,12 +78,27 @@ sun_on_facade
   null  — interior-only shot, extremely ambiguous lighting, or too little of the \
           facade is visible to judge.
 
+sun_visible_in_frame
+  true  — the sun disk itself is visible somewhere in the image (through a window, \
+          above the roofline, reflected, or directly in frame).
+  false — the sun is not visible; light is inferred from shadows or surface tones only.
+  null  — the image is an interior shot with no window, or so tightly cropped that \
+          the presence of the sun cannot be determined.
+
+scene_type
+  "exterior_facade"  — the photo is taken from outside and shows the building \
+                       facade, balcony, or street-level view.
+  "interior_window"  — the photo is taken from inside a room looking outward \
+                       through a window; the facade itself is not visible.
+  "unclear"          — the scene context cannot be determined (e.g. heavily \
+                       cropped, ambiguous angle).
+
 Be conservative: return "unclear" or null rather than guessing when evidence is weak.\
 """
 
 _USER_PROMPT = (
     "Analyze the sun and lighting conditions in this real-estate listing photo. "
-    "Return the five structured fields as defined. "
+    "Return all six structured fields as defined. "
     "Use 'unclear' (for string fields) or null (for boolean fields) "
     "whenever you cannot make a confident determination from the visual evidence."
 )
@@ -188,11 +194,12 @@ if __name__ == "__main__":
         print("Usage: python image_analysis.py <path/to/image.jpg>")
         print("\nExample output:")
         print(json.dumps({
-            "sun_direction": "SW",
             "sun_elevation": "medium",
             "lighting": "direct",
             "shadows_visible": True,
             "sun_on_facade": True,
+            "sun_visible_in_frame": False,
+            "scene_type": "exterior_facade",
         }, indent=2))
         sys.exit(0)
 
