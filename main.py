@@ -274,6 +274,6 @@ async def analyze_property(
 
 @app.post("/report")
 async def create_report(request_data: ReportRequest):
-    # This remains a STUB until the PDF generation module is ready.
-    empty_pdf_bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF"
-    return Response(content=empty_pdf_bytes, media_type="application/pdf")
+    from report import build_report
+    pdf_bytes = build_report(request_data.model_dump())
+    return Response(content=pdf_bytes, media_type="application/pdf")
