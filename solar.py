@@ -183,6 +183,7 @@ def get_solar_window(
     rise_az: float | None = None
     set_az: float | None = None
     prev_above = False
+    golden_hour_on_facade = False  # any facade sun hour with altitude < 6°
 
     for hour in range(0, 24):
         dt = datetime(year, month, 15, hour, 0, 0, tzinfo=timezone.utc)
@@ -208,30 +209,19 @@ def get_solar_window(
             if in_arc:
                 local_hour = dt.astimezone(local_tz).hour
                 sun_hours.append(f"{local_hour:02d}:00")
+                if altitude < 6:
+                    golden_hour_on_facade = True
 
     hours_count = len(sun_hours)
     receives = hours_count > 0
 
     month_name = datetime(year, month, 1).strftime("%B")
     if not receives:
-        notes = (
-            f"{direction}-facing facade receives no direct sun in {month_name}. "
-            "Claims of sunlight would be misleading."
-        )
-    elif hours_count >= 6:
-        notes = (
-            f"{direction}-facing facade gets excellent sun in {month_name} "
-            f"({hours_count}h/day). Sun from {sun_hours[0]} to {sun_hours[-1]}."
-        )
-    elif hours_count >= 3:
-        notes = (
-            f"{direction}-facing facade gets moderate sun in {month_name} "
-            f"({hours_count}h/day). Best times: {', '.join(sun_hours[:3])}."
-        )
+        notes = f"{direction}-facing facade receives no direct sun in {month_name}."
     else:
         notes = (
-            f"{direction}-facing facade gets limited sun in {month_name} "
-            f"({hours_count}h/day). Only around {', '.join(sun_hours)}."
+            f"{direction}-facing facade receives direct sun in {month_name} "
+            f"from {sun_hours[0]} to {sun_hours[-1]}."
         )
 
     return {
@@ -240,6 +230,7 @@ def get_solar_window(
         "hours_facade_receives_sun": hours_count,
         "best_sun_times":            sun_hours,
         "facade_receives_sun":       receives,
+        "has_golden_hour":           golden_hour_on_facade,
         "notes":                     notes,
     }
 
@@ -305,6 +296,19 @@ def analyze_address(address_str: str, facade_direction: str, month: int) -> dict
     result = get_solar_window(lat, lon, facade_direction, month)
     result["lat"] = round(lat, 5)
     result["lon"] = round(lon, 5)
+
+    month_name = datetime(datetime.now().year, month, 1).strftime("%B")
+    sun_hours = result["best_sun_times"]
+    if sun_hours:
+        result["notes"] = (
+            f"{address_str} — {facade_direction}-facing facade receives direct sun "
+            f"in {month_name} from {sun_hours[0]} to {sun_hours[-1]}."
+        )
+    else:
+        result["notes"] = (
+            f"{address_str} — {facade_direction}-facing facade receives no direct sun in {month_name}."
+        )
+
     return result
 
 

@@ -47,6 +47,19 @@ SUN_WINDOWS: dict[str, tuple[int, int] | None] = {
     "NW": (17, 22),
 }
 
+# Human-readable label for each VLM sun_elevation category.
+_VLM_LABEL = {"low": "sunrise/sunset", "medium": "morning/afternoon", "high": "midday"}
+
+
+def _sun_period(altitude_deg: float, local_hour: int) -> str:
+    """Classify the character of sunlight from real solar altitude and local hour."""
+    if altitude_deg < 6:
+        return "sunrise" if local_hour <= 12 else "sunset"
+    elif altitude_deg < 30:
+        return "morning sun" if local_hour < 13 else "afternoon sun"
+    else:
+        return "midday sun"
+
 # ── 3. Public Endpoints ────────────────────────────────────
 
 @app.get("/health")
@@ -118,14 +131,10 @@ async def analyze_property(
         vlm_data.get("sun_visible_in_frame") is None,
     ])
 
-    # Golden-hour threshold: true golden-hour light (intense orange, sun near
-    # horizon) only occurs before 07:00 or after 19:00. An 08:00 morning window
-    # start is not sunset-level low-angle light.
+    # has_golden_hour: computed by solar.py from real altitude data (< 6°).
+    # Location- and season-aware, unlike a fixed clock cutoff.
     best_times = solar_data.get("best_sun_times", [])
-    has_golden_hour = any(
-        int(t.split(":")[0]) < 7 or int(t.split(":")[0]) >= 19
-        for t in best_times
-    )
+    has_golden_hour = solar_data.get("has_golden_hour", False)
 
     # Pre-compute time-based verdict BEFORE the elif chain so both the elevation
     # check (real solar math) and the coarse window check can inform a single branch.
@@ -139,43 +148,60 @@ async def analyze_property(
             _lon = solar_data.get("lon")
             _observed_elev = vlm_data.get("sun_elevation")
 
-            # Priority 1: compare the elevation the VLM sees to the real solar altitude.
-            if _lat is not None and _lon is not None and _observed_elev not in (None, "unclear"):
+            # Always compute real altitude when coordinates are available so we
+            # can label the expected light character in every explanation.
+            _elev = None
+            if _lat is not None and _lon is not None:
                 _elev = get_sun_elevation_at_time(_lat, _lon, _photo_hour_int, month_int)
+
+            # Priority 1: compare the elevation the VLM sees to the real solar altitude.
+            if _elev is not None:
                 _expected_cat = _elev["elevation_category"]
+                _expected_period = (
+                    ("before sunrise" if _photo_hour_int < 12 else "after sunset")
+                    if _expected_cat == "below_horizon"
+                    else _sun_period(_elev["altitude_deg"], _photo_hour_int)
+                )
 
                 if _expected_cat == "below_horizon":
                     _time_verdict = "Possibly misleading"
                     _time_explanation = (
-                        f"Photo taken at {photo_time}, but the sun is below the horizon "
-                        f"at that time at this location in {month}."
+                        f"Photo taken at {photo_time} ({_expected_period}), but the sun is "
+                        f"below the horizon at that time at this location in {month}."
                     )
-                elif _expected_cat != _observed_elev:
+                elif _observed_elev not in (None, "unclear") and _expected_cat != _observed_elev:
+                    _observed_period = _VLM_LABEL.get(_observed_elev, _observed_elev)
                     _time_verdict = "Possibly misleading"
                     _time_explanation = (
-                        f"The sun appears {_observed_elev} in the photo, but at {photo_time} "
-                        f"in {month} the calculated solar elevation is {_elev['altitude_deg']}° "
-                        f"— consistent with {_expected_cat} light, not {_observed_elev}."
+                        f"The photo shows {_observed_period} light, but at {photo_time} in "
+                        f"{month} the sun is at {_elev['altitude_deg']}° — {_expected_period}, "
+                        f"not {_observed_period}."
                     )
 
             # Priority 2: window check using the real pysolar result so the
             # reported window matches the solar summary exactly.
             if _time_verdict is None:
+                _period_label = (
+                    f" ({_sun_period(_elev['altitude_deg'], _photo_hour_int)})"
+                    if _elev and _elev["elevation_category"] != "below_horizon"
+                    else ""
+                )
                 if best_times:
                     _real_start = int(best_times[0].split(":")[0])
                     _real_end   = int(best_times[-1].split(":")[0])
                     if not (_real_start <= _photo_hour_int <= _real_end):
                         _time_verdict = "Possibly misleading"
                         _time_explanation = (
-                            f"Photo taken at {photo_time}, but this {orientation}-facing facade "
-                            f"only receives direct sun between {best_times[0]} and "
-                            f"{best_times[-1]} in {month}."
+                            f"Photo taken at {photo_time}{_period_label}, but this "
+                            f"{orientation}-facing facade only receives direct sun between "
+                            f"{best_times[0]} and {best_times[-1]} in {month}."
                         )
                     else:
                         _time_verdict = "Consistent"
                         _time_explanation = (
-                            f"The photo time ({photo_time}) falls within the calculated sun window "
-                            f"for this {orientation}-facing facade ({best_times[0]}–{best_times[-1]})."
+                            f"The photo time ({photo_time}) falls within the sun window for "
+                            f"this {orientation}-facing facade ({best_times[0]}–{best_times[-1]})"
+                            f"{_period_label}."
                         )
                 else:
                     # Fallback: no real sun hours means facade_receives_sun is False,
@@ -184,22 +210,23 @@ async def analyze_property(
                     if _sun_window is None:
                         _time_verdict = "Possibly misleading"
                         _time_explanation = (
-                            f"Photo taken at {photo_time} appears to show direct sunlight, but "
-                            f"{orientation}-facing facades do not receive direct sun at mid-latitudes."
+                            f"Photo taken at {photo_time}{_period_label} appears to show "
+                            f"direct sunlight, but {orientation}-facing facades do not receive "
+                            f"direct sun at mid-latitudes."
                         )
                     elif not (_sun_window[0] <= _photo_hour_int < _sun_window[1]):
                         _time_verdict = "Possibly misleading"
                         _time_explanation = (
-                            f"Photo taken at {photo_time}, but {orientation}-facing facades typically "
-                            f"only receive direct sun between {_sun_window[0]:02d}:00 and "
-                            f"{_sun_window[1]:02d}:00."
+                            f"Photo taken at {photo_time}{_period_label}, but "
+                            f"{orientation}-facing facades typically only receive direct sun "
+                            f"between {_sun_window[0]:02d}:00 and {_sun_window[1]:02d}:00."
                         )
                     else:
                         _time_verdict = "Consistent"
                         _time_explanation = (
-                            f"The photo time ({photo_time}) falls within the expected sun window "
-                            f"for a {orientation}-facing facade "
-                            f"({_sun_window[0]:02d}:00–{_sun_window[1]:02d}:00)."
+                            f"The photo time ({photo_time}) falls within the sun window for a "
+                            f"{orientation}-facing facade "
+                            f"({_sun_window[0]:02d}:00–{_sun_window[1]:02d}:00){_period_label}."
                         )
         except (ValueError, IndexError):
             pass  # malformed photo_time — skip time checks
