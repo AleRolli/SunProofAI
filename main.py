@@ -113,12 +113,25 @@ async def analyze_property(
     # shadows_visible=None — that's not ambiguity, just scene type.
     is_interior = vlm_data.get("scene_type") == "interior_window"
 
-    # sun_present: sun is visible in the frame OR the facade is clearly lit.
-    # Both are equally strong evidence that sunlight exists in the photo.
-    sun_present = (
+    # is_reflection: sun is only visible as a glare/reflection in a window pane.
+    # Elevation cannot be reliably judged from a reflection, so we skip
+    # elevation-based checks (B2, T/E priority-1) when this is True.
+    is_reflection = (
         vlm_data.get("sun_visible_in_frame") is True
-        or vlm_data.get("sun_on_facade") is True
+        and vlm_data.get("sun_visible_direct") is False
     )
+
+    # sun_present: for exterior shots, either the sun disk or a lit facade counts.
+    # For interior shots, sun_on_facade means the *opposite* building is lit —
+    # that's not evidence about the subject property, so we ignore it.
+    if is_interior:
+        sun_present = vlm_data.get("sun_visible_in_frame") is True
+    else:
+        sun_present = (
+            vlm_data.get("sun_visible_in_frame") is True
+            or vlm_data.get("sun_on_facade") is True
+        )
+
 
     # Ambiguity score: only penalise None values when we'd actually expect data.
     # For interior shots, sun_on_facade and shadows_visible are always None —
@@ -155,7 +168,8 @@ async def analyze_property(
                 _elev = get_sun_elevation_at_time(_lat, _lon, _photo_hour_int, month_int)
 
             # Priority 1: compare the elevation the VLM sees to the real solar altitude.
-            if _elev is not None:
+            # Skip when sun is only a reflection — elevation from reflected light is unreliable.
+            if _elev is not None and not is_reflection:
                 _expected_cat = _elev["elevation_category"]
                 _expected_period = (
                     ("before sunrise" if _photo_hour_int < 12 else "after sunset")
@@ -231,15 +245,25 @@ async def analyze_property(
         except (ValueError, IndexError):
             pass  # malformed photo_time — skip time checks
 
+    # Scenario I: Interior shot with no usable sun evidence — photo tells us nothing about the facade.
+    # Covers: (a) no sun visible at all, (b) sun only visible as a window reflection.
+    if is_interior and (not sun_present or is_reflection):
+        verdict = "Inconclusive"
+        explanation = (
+            "Sun visible only as a window reflection — elevation cannot be reliably judged "
+            "from reflected light, so this photo provides no usable evidence about the facade's sun exposure."
+            if is_reflection else
+            "Interior shot with no direct sun visible through the window — "
+            "this photo provides no evidence about the facade's sun exposure."
+        )
+
     # Scenario A: Image too ambiguous to judge
-    if unclear_count >= 2:
+    elif unclear_count >= 2:
         verdict = "Inconclusive"
         explanation = "The image lighting is too ambiguous or lacks sufficient clear evidence to confidently verify."
 
     # Scenario B1: Sun visible in photo but this facade gets zero sun in this month
     elif sun_present and solar_data.get("facade_receives_sun") is False:
-        verdict = "Possibly misleading"
-        explanation = f"Photo shows sun, but calculations show {orientation} faces get no sun in {month}."
 
     # Scenario B2: Photo shows intense golden-hour light but the facade's solar
     # window never reaches those early/late hours — geometrically impossible.
@@ -248,6 +272,7 @@ async def analyze_property(
         and vlm_data.get("lighting") == "direct"
         and sun_present
         and not has_golden_hour
+        and not is_reflection
     ):
         window = f"{best_times[0]}–{best_times[-1]}" if best_times else "a limited window"
         verdict = "Possibly misleading"
