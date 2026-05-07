@@ -30,7 +30,8 @@ class SunAnalysis(BaseModel):
     lighting: Literal["direct", "diffuse", "overcast"]
     shadows_visible: Optional[bool]      # None = cannot assess
     sun_on_facade: Optional[bool]        # None = facade not visible (e.g. interior shot)
-    sun_visible_in_frame: Optional[bool] # None = sun position not determinable
+    sun_visible_in_frame: Optional[bool]  # None = sun position not determinable
+    sun_visible_direct: Optional[bool]    # None = sun not visible at all
     scene_type: Literal["exterior_facade", "interior_window", "unclear"]
 
 
@@ -79,11 +80,21 @@ sun_on_facade
           facade is visible to judge.
 
 sun_visible_in_frame
-  true  — the sun disk itself is visible somewhere in the image (through a window, \
-          above the roofline, reflected, or directly in frame).
+  true  — the sun or its glare is visible somewhere in the image, whether directly \
+          in the sky, through a window, or as a reflection in glass or a wet surface.
   false — the sun is not visible; light is inferred from shadows or surface tones only.
   null  — the image is an interior shot with no window, or so tightly cropped that \
           the presence of the sun cannot be determined.
+
+sun_visible_direct
+  Only fill this when sun_visible_in_frame is true; otherwise return null.
+  true  — the sun disk is directly visible in the open sky (not through glass, \
+          not a reflection). You can see its actual position above the horizon.
+  false — the sun appears only as a glare or reflection in a window pane, mirror, \
+          or wet surface. The actual sky position of the sun is NOT directly visible. \
+          When this is false, set sun_elevation to "unclear" because elevation \
+          cannot be reliably judged from a reflected image.
+  null  — sun_visible_in_frame is false or null.
 
 scene_type
   "exterior_facade"  — the photo is taken from outside and shows the building \
@@ -98,7 +109,7 @@ Be conservative: return "unclear" or null rather than guessing when evidence is 
 
 _USER_PROMPT = (
     "Analyze the sun and lighting conditions in this real-estate listing photo. "
-    "Return all six structured fields as defined. "
+    "Return all seven structured fields as defined. "
     "Use 'unclear' (for string fields) or null (for boolean fields) "
     "whenever you cannot make a confident determination from the visual evidence."
 )
