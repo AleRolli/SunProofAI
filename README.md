@@ -11,45 +11,40 @@ Real estate agents increasingly use AI image editors to add sunshine to property
 A user uploads a listing photo and provides the property address, facade orientation, and the month of interest. The system runs two independent analyses in parallel and then reconciles them:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Streamlit Frontend                        │
-│  Upload photo · Address · Orientation · Month · Photo time      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │  POST /analyze
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FastAPI Backend (main.py)                   │
-│                                                                  │
-│   ┌──────────────────────────┐   ┌────────────────────────────┐ │
-│   │   Vision Engine          │   │   Solar Engine             │ │
-│   │   image_analysis.py      │   │   solar.py                 │ │
-│   │                          │   │                            │ │
-│   │  Claude claude-opus-4-7  │   │  OpenStreetMap Nominatim   │ │
-│   │  (adaptive thinking)     │   │  → geocode address         │ │
-│   │                          │   │                            │ │
-│   │  Returns:                │   │  pysolar                   │ │
-│   │  • sun_elevation         │   │  → real solar altitude     │ │
-│   │  • lighting type         │   │  → facade sun window       │ │
-│   │  • shadows visible?      │   │  → golden-hour detection   │ │
-│   │  • sun on facade?        │   │                            │ │
-│   │  • scene type            │   │  Returns:                  │ │
-│   └──────────────┬───────────┘   │  • sun hours per day       │ │
-│                  │               │  • has golden hour?        │ │
-│                  └───────┬───────┘  • facade_receives_sun     │ │
-│                          │                                      │ │
-│                  Reconciliation Logic                            │ │
-│                  ┌───────┴────────────────────────────────┐     │ │
-│                  │  CONSISTENT · POSSIBLY MISLEADING ·    │     │ │
-│                  │  INCONCLUSIVE                          │     │ │
-│                  └────────────────────────────────────────┘     │ │
-└─────────────────────────────────────────────────────────────────┘
-                             │  POST /report
-                             ▼
-                    ┌─────────────────┐
-                    │   report.py     │
-                    │  PDF generator  │
-                    │  (fpdf2)        │
-                    └─────────────────┘
+Streamlit Frontend  (app.py)
+Upload photo · Address · Orientation · Month · Photo time
+        │
+        │  POST /analyze
+        ▼
+── FastAPI Backend (main.py) ──────────────────────────────────
+
+ ┌──────────────────────────┐  ┌──────────────────────────┐
+ │  Vision Engine           │  │  Solar Engine            │
+ │  image_analysis.py       │  │  solar.py                │
+ │                          │  │                          │
+ │  Claude claude-opus-4-7  │  │  Nominatim geocoding     │
+ │  (adaptive thinking)     │  │  pysolar calculations    │
+ │                          │  │                          │
+ │  · sun_elevation         │  │  · sun hours / day       │
+ │  · lighting type         │  │  · facade_receives_sun   │
+ │  · shadows_visible       │  │  · has_golden_hour       │
+ │  · sun_on_facade         │  │  · elevation @ time      │
+ │  · scene_type            │  │                          │
+ └────────────┬─────────────┘  └─────────────┬────────────┘
+              └───────────────┬──────────────┘
+                              ▼
+                    Reconciliation Logic
+       CONSISTENT · POSSIBLY MISLEADING · INCONCLUSIVE
+
+───────────────────────────────────────────────────────────────
+
+        │  POST /report
+        ▼
+ ┌──────────────────────┐
+ │  report.py           │
+ │  PDF compliance note │
+ │  (fpdf2)             │
+ └──────────────────────┘
 ```
 
 ### Verdict Logic
