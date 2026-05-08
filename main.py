@@ -264,6 +264,8 @@ async def analyze_property(
 
     # Scenario B1: Sun visible in photo but this facade gets zero sun in this month
     elif sun_present and solar_data.get("facade_receives_sun") is False:
+        verdict = "Possibly misleading"
+        explanation = f"Photo shows sun, but calculations show {orientation} faces get no sun in {month}."
 
     # Scenario B2: Photo shows intense golden-hour light but the facade's solar
     # window never reaches those early/late hours — geometrically impossible.
