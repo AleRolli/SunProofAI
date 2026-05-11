@@ -1,3 +1,4 @@
+import base64
 import mimetypes
 import os
 import streamlit as st
@@ -199,27 +200,29 @@ def call_backend(image_bytes, address, orientation, month, photo_time: str = "")
     return result
 
 
-def call_report_backend(result, inputs):
-    """POST the verdict back to Gabriel's /report endpoint to get the PDF bytes.
+def call_report_backend(result, inputs, image_bytes=None):
+    """POST the verdict (and optionally the photo) to /report to get PDF bytes.
 
     Returns the raw PDF bytes on success, or None if the backend is unreachable
-    or the response isn't a PDF. The endpoint is currently a stub on Gabriel's
-    side — it returns a placeholder PDF until report.py is wired in.
+    or the response isn't a PDF.
     """
     if _requests is None:
         return None
+    payload = {
+        "address": inputs.get("address", ""),
+        "orientation": inputs.get("orientation", ""),
+        "month": inputs.get("month", ""),
+        "verdict": result.get("verdict", ""),
+        "explanation": result.get("explanation", ""),
+        "solar_summary": result.get("solar_summary", ""),
+    }
+    if image_bytes:
+        payload["image_b64"] = base64.b64encode(image_bytes).decode("utf-8")
     try:
         response = _requests.post(
             f"{BACKEND_URL}/report",
-            json={
-                "address": inputs.get("address", ""),
-                "orientation": inputs.get("orientation", ""),
-                "month": inputs.get("month", ""),
-                "verdict": result.get("verdict", ""),
-                "explanation": result.get("explanation", ""),
-                "solar_summary": result.get("solar_summary", ""),
-            },
-            timeout=30,
+            json=payload,
+            timeout=60,
         )
         response.raise_for_status()
     except Exception:
@@ -513,7 +516,7 @@ def show_results_page():
     # wired into main.py — once that lands, the same call yields a real
     # compliance note with no frontend changes needed.
     st.subheader("Compliance note")
-    pdf_bytes = call_report_backend(result, inputs)
+    pdf_bytes = call_report_backend(result, inputs, st.session_state.submitted_image)
     st.download_button(
         label="Download PDF report",
         data=pdf_bytes or b"",

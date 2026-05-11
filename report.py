@@ -12,8 +12,12 @@ Input:  dict with keys  address, orientation, month, verdict,
 Output: raw PDF bytes — one A4 page, no external font files required.
 """
 
+import base64
+import io
 from datetime import datetime
+
 from fpdf import FPDF
+from PIL import Image as PILImage
 
 
 def _safe(text: str) -> str:
@@ -73,6 +77,20 @@ def build_report(data: dict) -> bytes:
     verdict       =       data.get("verdict",       "Inconclusive")
     explanation   = _safe(data.get("explanation",   ""))
     solar_summary = _safe(data.get("solar_summary", ""))
+
+    # Decode the optional photo; compute display dimensions preserving aspect ratio.
+    _img_bytes: bytes | None = None
+    _img_w = _img_h = 0.0
+    _MAX_W, _MAX_H = 120.0, 55.0   # mm — keeps the page balanced
+    if data.get("image_b64"):
+        try:
+            _img_bytes = base64.b64decode(data["image_b64"])
+            with PILImage.open(io.BytesIO(_img_bytes)) as _pil:
+                _pw, _ph = _pil.size
+            _scale = min(_MAX_W / _pw, _MAX_H / _ph)
+            _img_w, _img_h = _pw * _scale, _ph * _scale
+        except Exception:
+            _img_bytes = None
 
     dt        = datetime.now()
     generated = f"{dt.day} {dt.strftime('%B %Y')}"   # e.g. "6 May 2026" — cross-platform
@@ -153,8 +171,16 @@ def build_report(data: dict) -> bytes:
         pdf.ln(3)
         return pdf.get_y()
 
-    # ── 4. Explanation ─────────────────────────────────────────────────────────
-    y = _section("EXPLANATION", badge_y + badge_h + 9)
+    # ── 4. Analysed photo (optional) ───────────────────────────────────────────
+    _content_start_y = badge_y + badge_h + 9
+    if _img_bytes:
+        y = _section("ANALYSED PHOTO", _content_start_y)
+        _img_x = M + (CW - _img_w) / 2
+        pdf.image(io.BytesIO(_img_bytes), x=_img_x, y=y, w=_img_w, h=_img_h)
+        _content_start_y = y + _img_h + 8
+
+    # ── 5. Explanation ─────────────────────────────────────────────────────────
+    y = _section("EXPLANATION", _content_start_y)
 
     pdf.set_xy(M, y)
     pdf.set_text_color(*_DARK)
@@ -162,7 +188,7 @@ def build_report(data: dict) -> bytes:
     pdf.multi_cell(CW, 5.5, explanation)
     y = pdf.get_y()
 
-    # ── 5. Solar calculation summary ───────────────────────────────────────────
+    # ── 6. Solar calculation summary ───────────────────────────────────────────
     y = _section("SOLAR CALCULATION SUMMARY", y + 8)
 
     # Tinted box sized to the content
@@ -177,7 +203,7 @@ def build_report(data: dict) -> bytes:
     pdf.multi_cell(CW - 6, 5.5, solar_summary)
     y = pdf.get_y() + 4
 
-    # ── 6. Disclaimer ──────────────────────────────────────────────────────────
+    # ── 7. Disclaimer ──────────────────────────────────────────────────────────
     disc_y = max(y + 8, 238)
 
     pdf.set_xy(M, disc_y)
@@ -196,7 +222,7 @@ def build_report(data: dict) -> bytes:
         "SunProof AI does not guarantee correctness and accepts no liability.",
     )
 
-    # ── 7. Footer bar ──────────────────────────────────────────────────────────
+    # ── 8. Footer bar ──────────────────────────────────────────────────────────
     footer_y = PH - 12
     pdf.set_fill_color(*_ORANGE)
     pdf.rect(0, footer_y, PW, 12, style="F")

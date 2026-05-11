@@ -25,6 +25,7 @@ class ReportRequest(BaseModel):
     verdict: str
     explanation: str
     solar_summary: str
+    image_b64: str | None = None
 
 # Ferdinand's math requires an integer (1-12), but Alessandro's frontend sends a string ("July").
 MONTH_MAP = {
