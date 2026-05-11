@@ -9,3 +9,4 @@ Pillow
 requests
 pysolar
 fpdf2
+timezonefinder
