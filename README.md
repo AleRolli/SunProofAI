@@ -4,6 +4,8 @@
 
 Real estate agents increasingly use AI image editors to add sunshine to property photos, showing balconies bathed in warm afternoon light that the facade could never actually receive given its compass direction and the time of year. SunProof AI cross-references the lighting visible in a photo against deterministic solar geometry to flag misleading listings.
 
+🌐 **Live demo: [sunproofai.streamlit.app](https://sunproofai.streamlit.app)**
+
 ---
 
 ## How It Works
@@ -59,6 +61,19 @@ The reconciliation engine in `main.py` applies a priority cascade:
 | 4 | Photo shows golden-hour light but facade's sun window never reaches those hours | Possibly misleading |
 | 5 | Photo time + VLM-observed elevation cross-check with real solar altitude | Possibly misleading or Consistent |
 | 6 | All checks pass | Consistent |
+
+---
+
+## Deployment
+
+The app is fully deployed and live:
+
+| Service | Platform | URL |
+|---------|----------|-----|
+| Frontend (Streamlit) | Streamlit Community Cloud | [sunproofai.streamlit.app](https://sunproofai.streamlit.app) |
+| Backend (FastAPI) | Railway | configured via Streamlit Secrets |
+
+The `ANTHROPIC_API_KEY` is stored as a Railway environment variable. The backend URL is configured via Streamlit Secrets. Both services are connected and running end-to-end — upload your own listing photograph and enter the property details to generate a real verification result.
 
 ---
 
