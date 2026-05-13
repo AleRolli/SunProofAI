@@ -363,27 +363,6 @@ def show_input_page():
                         "Sanity-check: this should roughly match the address you enter below."
                     )
 
-    # ── Demo sample buttons ───────────────────────────────────
-    st.caption("Or load one of the prepared demo cases:")
-    sample_cols = st.columns(len(SAMPLES))
-    for col, sample in zip(sample_cols, SAMPLES):
-        with col:
-            if st.button(
-                sample["label"],
-                use_container_width=True,
-                help=sample["help"],
-                key=f"sample_{sample['filename']}",
-            ):
-                with open(SAMPLES_DIR / sample["filename"], "rb") as f:
-                    st.session_state.sample_image_bytes = f.read()
-                st.session_state.sample_filename = sample["filename"]
-                st.session_state.address = sample["address"]
-                st.session_state.orientation = sample["orientation"]
-                st.session_state.month = sample["month"]
-                st.session_state.photo_hour = sample.get("photo_hour", "Not specified")
-                st.session_state.uploader_key += 1  # clear any manual upload
-                st.rerun()
-
     st.divider()
 
     # ── Step 2: Property details ──────────────────────────────
