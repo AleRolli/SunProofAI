@@ -74,10 +74,7 @@ SunProofAI/
 ├── requirements.txt    — Python dependencies
 ├── .streamlit/
 │   └── config.toml     — Streamlit theme (warm orange brand palette)
-└── test_images/        — Demo samples for all three verdict states
-    ├── direct_sun.PNG       → Consistent demo
-    ├── golden_hour.PNG      → Possibly misleading demo
-    ├── normal.jpg           → Inconclusive demo
+└── test_images/        — Sample images for local testing
     └── report_test_*.pdf    — Sample PDF outputs
 ```
 
@@ -143,18 +140,6 @@ The UI will open at `http://localhost:8501`.
 | `GET`  | `/health` | Liveness check |
 | `POST` | `/analyze` | Main analysis — `multipart/form-data`: `image` (file), `address`, `orientation`, `month`, `photo_time` (optional, `HH:MM`) |
 | `POST` | `/report` | Generate PDF — JSON body: `address`, `orientation`, `month`, `verdict`, `explanation`, `solar_summary` |
-
----
-
-## Demo Samples
-
-Three one-click presets are built into the UI, covering every verdict state:
-
-| Button | Image | Address | Setup | Expected verdict |
-|--------|-------|---------|-------|-----------------|
-| Consistent | `direct_sun.PNG` | Bygdøy allé 30, Oslo | South facade · July · 13:00 | Consistent |
-| Possibly Misleading | `golden_hour.PNG` | Karl Johans gate 1, Oslo | East facade · July · 17:00 | Possibly misleading |
-| Inconclusive | `normal.jpg` | Markveien 35, Oslo | East facade · October | Inconclusive |
 
 ---
 
